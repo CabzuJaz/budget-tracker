@@ -1,28 +1,32 @@
 import os
 from datetime import datetime, timedelta
-from openpyxl import Workbook
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MASTER_FILE = "Expenses.txt"
 
-FILES = {
-    "Cash": "cash.txt",
-    "Ralph_CC": "ralph_cc.txt",
-    "Jazz_CC": "jazz_cc.txt",
-    "Spaylater": "spaylater.txt"
+OUTPUT_FILES = {
+    "Cash": "Cash.txt",
+    "Ralph_CC": "Ralph_CC.txt",
+    "Jazz_CC": "Jazz.txt",
+    "Spaylater": "Spaylater.txt"
 }
+
+CASH_ON_HAND_FILE = "Cash_on_Hand.txt"
 
 # ======================
 # UTIL
 # ======================
 
-def parse_date(date_str):
-    return datetime.strptime(date_str, "%b %d, %Y")
+def parse_date(s):
+    return datetime.strptime(s, "%m%d%y")
 
-def format_date(date_obj):
-    return date_obj.strftime("%b %d, %Y")
+def format_date(d):
+    return d.strftime("%m%d%y")
 
-def ensure_file(filename):
-    path = os.path.join(BASE_DIR, filename)
+def ensure_file(name):
+    path = os.path.join(BASE_DIR, name)
     if not os.path.exists(path):
         open(path, "w").close()
     return path
@@ -34,7 +38,7 @@ def next_month(y, m):
     return (y+1, 1) if m == 12 else (y, m+1)
 
 # ======================
-# CYCLE LOGIC
+# LOGIC
 # ======================
 
 def get_cycle_range(category, date):
@@ -57,169 +61,215 @@ def get_cycle_range(category, date):
             return datetime(y, m, 16), datetime(ny, nm, 15)
 
 def get_due_date(category, cycle_end):
-    if category in ["Ralph_CC", "Spaylater"]:
+    if category == "Ralph_CC":
         return cycle_end + timedelta(days=20)
-    if category == "Jazz_CC":
-        return datetime(cycle_end.year + (cycle_end.month // 12),
-                        (cycle_end.month % 12) + 1, 5)
+
+    if category in ["Jazz_CC", "Spaylater"]:
+        return datetime(
+            cycle_end.year + (cycle_end.month // 12),
+            (cycle_end.month % 12) + 1,
+            5
+        )
+        
 
 # ======================
-# ADD EXPENSE
+# DATA
 # ======================
 
-def add_expense():
-    try:
-        date_str = input("Date (Apr 30, 2026): ")
-        txn_date = parse_date(date_str)
-
-        category = input("Category (Cash, Ralph_CC, Jazz_CC, Spaylater): ")
-        if category not in FILES:
-            print("Invalid category.")
-            return
-
-        desc = input("Description: ")
-        amount = float(input("Amount: "))
-
-        file_path = ensure_file(FILES[category])
-
-        if category == "Cash":
-            with open(file_path, "a") as f:
-                f.write(f"{date_str}|{desc}|-{amount}\n")
-        else:
-            start, end = get_cycle_range(category, txn_date)
-            due = get_due_date(category, end)
-
-            with open(file_path, "a") as f:
-                f.write(f"{date_str}|{desc}|{amount}|{format_date(due)}|UNPAID\n")
-
-        print("✅ Saved")
-
-    except Exception as e:
-        print("Error:", e)
-
-# ======================
-# MARK PAID
-# ======================
-
-def mark_paid():
-    category = input("Category: ")
-    file_path = ensure_file(FILES[category])
-
-    lines = open(file_path).readlines()
-
-    for i, line in enumerate(lines):
-        print(f"{i}: {line.strip()}")
-
-    idx = int(input("Select index to mark PAID: "))
-    parts = lines[idx].strip().split("|")
-
-    if len(parts) >= 5:
-        parts[4] = "PAID"
-        lines[idx] = "|".join(parts) + "\n"
-
-    with open(file_path, "w") as f:
-        f.writelines(lines)
-
-    print("✅ Marked as PAID")
-
-# ======================
-# CURRENT CYCLE TOTAL
-# ======================
-
-def get_current_cycle_total(category):
-    today = datetime.today()
-    start, end = get_cycle_range(category, today)
-
-    total = 0
-
-    with open(ensure_file(FILES[category])) as f:
-        for line in f:
-            parts = line.strip().split("|")
-            txn_date = parse_date(parts[0])
-            amount = float(parts[2])
-            status = parts[4] if len(parts) > 4 else "UNPAID"
-
-            if start <= txn_date <= end and status == "UNPAID":
-                total += amount
-
-    return total, start, end
-
-# ======================
-# DASHBOARD
-# ======================
-
-def show_dashboard():
-    print("\n===== UPCOMING BILLS =====")
-
-    today = datetime.today()
+def load_all():
+    path = ensure_file(MASTER_FILE)
     data = []
 
-    for cat in ["Ralph_CC", "Jazz_CC", "Spaylater"]:
-        total, start, end = get_current_cycle_total(cat)
-        due = get_due_date(cat, end)
-        days = (due - today).days
+    with open(path) as f:
+        for line in f:
+            parts = line.strip().split("|")
+            if len(parts) < 6:
+                continue
+            data.append({
+                "date": parse_date(parts[0]),
+                "category": parts[1],
+                "desc": parts[2],
+                "amount": float(parts[3]),
+                "due": parts[4],
+                "status": parts[5]
+            })
+    return data
 
-        data.append((cat, total, due, days))
-
-    data.sort(key=lambda x: x[2])
-
-    for d in data:
-        print(f"\n{d[0]}")
-        print(f"Due: {format_date(d[2])}")
-        print(f"Amount: {d[1]}")
-        print(f"Days Left: {d[3]}")
-
-    print("\n MOST URGENT:", data[0][0])
-
-# ======================
-# EXPORT EXCEL
-# ======================
-
-def export_excel():
-    wb = Workbook()
-
-    for category in FILES:
-        ws = wb.create_sheet(title=category)
-
-        ws.append(["Date", "Description", "Amount", "Due", "Status"])
-
-        with open(ensure_file(FILES[category])) as f:
-            for line in f:
-                ws.append(line.strip().split("|"))
-
-    if "Sheet" in wb.sheetnames:
-        del wb["Sheet"]
-
-    path = os.path.join(BASE_DIR, "budget_report.xlsx")
-    wb.save(path)
-
-    print("✅ Exported:", path)
+def save_all(data):
+    with open(MASTER_FILE, "w") as f:
+        for r in data:
+            f.write(f"{format_date(r['date'])}|{r['category']}|{r['desc']}|{r['amount']}|{r['due']}|{r['status']}\n")
 
 # ======================
-# MENU
+# FILE GENERATION
 # ======================
 
-def menu():
-    while True:
-        print("\n==== BUDGET TRACKER ====")
-        print("1. Add Expense")
-        print("2. Mark Paid")
-        print("3. Dashboard")
-        print("4. Export Excel")
-        print("5. Exit")
+def regenerate_files(data):
+    for f in OUTPUT_FILES.values():
+        open(f, "w").close()
+    open(CASH_ON_HAND_FILE, "w").close()
 
-        c = input("Choose: ")
+    balance = 0
 
-        if c == "1":
-            add_expense()
-        elif c == "2":
-            mark_paid()
-        elif c == "3":
-            show_dashboard()
-        elif c == "4":
-            export_excel()
-        elif c == "5":
-            break
+    for r in sorted(data, key=lambda x: x["date"]):
+        cat = r["category"]
 
-if __name__ == "__main__":
-    menu()
+        if cat in OUTPUT_FILES:
+            with open(OUTPUT_FILES[cat], "a") as f:
+                f.write(f"{format_date(r['date'])}|{r['desc']}|{r['amount']}|{r['due']}|{r['status']}\n")
+
+        if cat == "Cash":
+            balance += r["amount"]
+            with open(CASH_ON_HAND_FILE, "a") as f:
+                f.write(f"{format_date(r['date'])}|{r['desc']}|{r['amount']}|BAL:{balance}\n")
+
+# ======================
+# GUI
+# ======================
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Budget Tracker")
+
+        # Inputs
+        tk.Label(root, text="Date (MMDDYY)").grid(row=0, column=0)
+        tk.Label(root, text="Category").grid(row=1, column=0)
+        tk.Label(root, text="Description").grid(row=2, column=0)
+        tk.Label(root, text="Amount").grid(row=3, column=0)
+
+        self.date = tk.Entry(root)
+        self.date.grid(row=0, column=1)
+
+        self.category = ttk.Combobox(root, values=["Cash", "Ralph_CC", "Jazz_CC", "Spaylater"])
+        self.category.grid(row=1, column=1)
+
+        self.desc = tk.Entry(root)
+        self.desc.grid(row=2, column=1)
+
+        self.amount = tk.Entry(root)
+        self.amount.grid(row=3, column=1)
+
+        tk.Button(root, text="Add Expense", command=self.add).grid(row=4, column=0, columnspan=2)
+
+        tk.Button(root, text="Mark Paid", command=self.mark_paid).grid(row=5, column=0, columnspan=2)
+
+        tk.Button(root, text="Dashboard", command=self.dashboard).grid(row=6, column=0, columnspan=2)
+
+        tk.Button(root, text="Clear All", command=self.clear).grid(row=7, column=0, columnspan=2)
+
+        # Table
+        self.tree = ttk.Treeview(root, columns=("date","cat","desc","amt","due","status"), show="headings")
+        for col in self.tree["columns"]:
+            self.tree.heading(col, text=col)
+
+        self.tree.grid(row=0, column=2, rowspan=8)
+
+        self.refresh()
+
+    def refresh(self):
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+
+        for r in load_all():
+            self.tree.insert("", "end", values=(
+                format_date(r["date"]),
+                r["category"],
+                r["desc"],
+                r["amount"],
+                r["due"],
+                r["status"]
+            ))
+
+    def add(self):
+        try:
+            d = parse_date(self.date.get())
+            cat = self.category.get()
+            desc = self.desc.get()
+            amt = float(self.amount.get())
+
+            data = load_all()
+
+            if cat == "Cash":
+                data.append({"date": d, "category": cat, "desc": desc, "amount": -amt, "due": "", "status": ""})
+            else:
+                _, end = get_cycle_range(cat, d)
+                due = get_due_date(cat, end)
+                data.append({"date": d, "category": cat, "desc": desc, "amount": amt, "due": format_date(due), "status": "UNPAID"})
+
+            save_all(data)
+            regenerate_files(data)
+            self.refresh()
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def mark_paid(self):
+        selected = self.tree.selection()
+        if not selected:
+            return
+
+        index = self.tree.index(selected[0])
+        data = load_all()
+
+        data[index]["status"] = "PAID"
+
+        save_all(data)
+        regenerate_files(data)
+        self.refresh()
+
+    def dashboard(self):
+        data = load_all()
+        today = datetime.today()
+
+        msg = ""
+        overall_total = 0
+
+        results = []
+
+        for cat in ["Ralph_CC", "Jazz_CC", "Spaylater"]:
+            start, end = get_cycle_range(cat, today)
+            due = get_due_date(cat, end)
+
+            total = sum(
+                r["amount"]
+                for r in data
+                if r["category"] == cat
+                and start <= r["date"] <= end
+                and r["status"] == "UNPAID"
+            )
+
+            overall_total += total
+
+            days = (due - today).days
+            results.append((cat, total, due, days))
+
+        # sort by nearest due
+        results.sort(key=lambda x: x[2])
+
+        for r in results:
+            msg += f"{r[0]}\n"
+            msg += f"Due: {format_date(r[2])} | Amount: {r[1]} | Days: {r[3]}\n\n"
+
+        msg += "----------------------\n"
+        msg += f"OVERALL DUE: {overall_total}\n"
+
+        # highlight most urgent
+        if results:
+            msg += f"\n MOST URGENT: {results[0][0]}"
+
+        messagebox.showinfo("Dashboard", msg)
+
+    def clear(self):
+        if messagebox.askyesno("Confirm", "Clear all data?"):
+            open(MASTER_FILE, "w").close()
+            regenerate_files([])
+            self.refresh()
+
+# ======================
+# RUN
+# ======================
+
+root = tk.Tk()
+app = App(root)
+root.mainloop()
